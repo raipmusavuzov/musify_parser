@@ -1,7 +1,10 @@
+import math
 import os
+import signal
 import argparse
 import enum
 import re
+import sys
 from bs4 import BeautifulSoup
 import requests
 from progress.bar import FillingSquaresBar
@@ -10,18 +13,19 @@ from progress.bar import FillingSquaresBar
 class Target(enum.Enum):
     artist = 0
     album = 1
-    track = 2
+    song = 2
     artist_album = 2
 
 
 class Parser:
     def __init__(self) -> None:
         self.HOST = 'https://musify.club'
-        self.page = self.HOST + '/artist/journey-5316'
+        self.page = None
         self.directory = os.getcwd()
         self.message = ''
+        self.count = -1
 
-    def download_track(self, url: str, filename: str):
+    def download_song(self, url: str, filename: str):
         response = requests.get(url, allow_redirects=False)
         location = response.headers['Location']
         response = requests.get(location, stream=True)
@@ -37,7 +41,7 @@ class Parser:
         bar.finish()
 
     def parse_page(self, page: str, save_path: str):
-        while page:
+        while page and self.count:
             response = requests.get(page)
             soup = BeautifulSoup(response.text, 'html.parser')
             for playlist_item in soup.find_all('div', class_='playlist__item'):
@@ -46,7 +50,10 @@ class Parser:
                         'a', attrs={'itemprop': 'audio'})
                     filename = save_path + os.path.sep + \
                         re.sub(r'[\/*?<>"]', '-', audio['download'])
-                    self.download_track(self.HOST + audio['href'], filename)
+                    self.download_song(self.HOST + audio['href'], filename)
+                    self.count -= 1
+                    if not self.count:
+                        return
             page = soup.find('li', 'pagination-next')
             if page:
                 page = page.a['href']
@@ -70,7 +77,7 @@ class Parser:
         elif target == Target.artist or target == Target.album:
             if target == Target.artist:
                 target_text = soup.find('a', id='artists')
-                self.message = 'Скачивание всех песен исполнителя ' + search_text
+                self.message = 'Скачивание песен исполнителя ' + search_text
             else:
                 target_text = soup.find('a', id='album')
                 self.message = 'Скачивание альбома ' + search_text
@@ -85,6 +92,7 @@ class Parser:
         self.page = page
 
     def run(self):
+        signal.signal(signal.SIGINT, self.exit_handler)
         arg_parser = argparse.ArgumentParser()
         arg_parser.add_argument(
             '-p', '--page', dest='page', help='страница скачивания')
@@ -93,7 +101,7 @@ class Parser:
         arg_parser.add_argument(
             '-r', '--release', dest='release', help='альбом')
         arg_parser.add_argument(
-            '-c', '--count', dest='count', help='количество скачивания')
+            '-c', '--count', dest='count', type=int, help='количество скачиваемых песен')
         arg_parser.add_argument('-d', '--directory',
                                 dest='directory', help='директория сохранения')
 
@@ -112,11 +120,15 @@ class Parser:
         if args.directory:
             self.directory = args.directory
         if args.count:
-            self.count = args.count
+            self.count = abs(args.count)
 
         if self.page:
             print(self.message)
             self.parse_page(self.page, self.directory)
+
+    def exit_handler(sig, frame):
+        print('\nЗавершение работы парсера...')
+        sys.exit(0)
 
 
 if __name__ == '__main__':
